@@ -1,0 +1,10 @@
+[package]
+name = "bitmice-utils"
+version = "1.0.0"
+edition = "2021"
+authors = ["AndrielFR <andrielfr@proton.me>"]
+license = "BSD 3-Clause"
+repository = "https://github.com/AndrielFR/bitmice"
+
+[dependencies]
+bytes = "1"
