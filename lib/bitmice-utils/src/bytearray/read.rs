@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright (c) 2022 AndrielFR <https://github.com/AndrielFR>
+// Copyright (c) 2022-2024 AndrielFR <https://github.com/AndrielFR>
 
 use bytes::Buf;
 
 use super::ByteArray;
 
 impl ByteArray {
+    pub fn read(&mut self, length: usize) -> Self {
+        Self {
+            bytes: self.bytes[0..length].to_vec(),
+        }
+    }
+
     pub fn read_i8(&mut self) -> i8 {
         let mut bytes_slice = self.bytes.as_slice();
         let byte = bytes_slice.get_i8();

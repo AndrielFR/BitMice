@@ -4,7 +4,6 @@ members = [
 	# "lib/bitmice-database",
 	# "lib/bitmice-events",
 	# "lib/bitmice-lua",
-	# "lib/bitmice-macros",
 	# "lib/bitmice-minigames",
-	# "lib/bitmice-tokens",
 ]
+resolver = "2"

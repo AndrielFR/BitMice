@@ -1,0 +1,328 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2022-2024 AndrielFR <https://github.com/AndrielFR>
+
+use std::{
+    io::Read,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+    vec,
+};
+
+use bitmice_utils::ByteArray;
+use rand::{seq::SliceRandom, Rng};
+use tokio::{sync::Mutex, time::Interval};
+
+use crate::{tokens, Client, Result, Server};
+
+const VANILLA_MAPS_FOLDER: &str = "./assets/maps/vanilla/";
+
+#[derive(Debug)]
+pub struct Room {
+    pub name: String,
+    pub map_name: String,
+    pub lang: String,
+    pub map_xml: String,
+    pub next_map: String,
+    sync_name: String,
+
+    pub map_code: i32,
+    pub map_perma: i8,
+    pub round_time: i16,
+    pub start_time: u128,
+    pub last_round_code: i8,
+    sync_code: i32,
+
+    pub is_new: bool,
+    pub is_inverted_map: bool,
+    pub is_specific_map: bool,
+
+    clients: Vec<Arc<Mutex<Client>>>,
+    pub map_type: MapType,
+    pub change_map_interval: Option<Interval>,
+}
+
+impl Room {
+    pub fn new(name: String, lang: String, is_new: bool) -> Self {
+        Self {
+            name,
+            map_name: String::from("BitMice"),
+            lang,
+            map_xml: String::new(),
+            next_map: String::from("-1"),
+            sync_name: String::new(),
+
+            map_code: -1,
+            map_perma: 0,
+            round_time: 0,
+            start_time: 0,
+            last_round_code: -1,
+            sync_code: -1,
+
+            is_new,
+            is_inverted_map: false,
+            is_specific_map: false,
+
+            clients: Vec::new(),
+            map_type: MapType::Vanilla,
+            change_map_interval: None,
+        }
+    }
+
+    pub async fn players(&self) -> Vec<Arc<Mutex<Client>>> {
+        let mut ps = Vec::new();
+
+        for client in self.clients.iter() {
+            ps.push(Arc::clone(client));
+        }
+
+        ps
+    }
+
+    pub async fn players_count(&self) -> usize {
+        self.players().await.len()
+    }
+
+    fn select_map(&mut self) {
+        if &self.next_map == "-1" {
+            match self.map_type {
+                MapType::Vanilla => {
+                    let (map_code, xml) = self.get_vanilla_map_xml();
+
+                    self.map_code = map_code;
+                    self.map_name = String::from("BitMice");
+                    self.map_xml = xml;
+                    self.map_perma = 22;
+                    self.is_inverted_map = false;
+                }
+                _ => {
+                    self.map_code = -1;
+                    self.map_name = String::from("Invalid");
+                    self.map_xml = String::from("<C><P /><Z><S /><D /><O /></Z></C>");
+                    self.map_perma = -1;
+                    self.is_inverted_map = false;
+                }
+            }
+
+            return;
+        }
+
+        let next_map = self.next_map.clone();
+        self.next_map = String::from("-1");
+        self.map_code = -1;
+
+        if let Ok(next_code) = next_map.parse::<i32>() {
+            self.map_code = next_code;
+        } else if next_map.starts_with("@") {
+            // custom
+            let map_code = next_map[1..].parse::<i32>().unwrap();
+
+            if let Some(info) = get_map_info(map_code) {
+                self.map_code = map_code;
+                self.map_name = info[0].to_string();
+                self.map_xml = info[1].to_string();
+                self.map_perma = info[2].parse::<i8>().unwrap();
+                self.is_inverted_map = false;
+            } else {
+                self.map_code = 0;
+            }
+        } else if next_map.starts_with("#") {
+            // perm
+            let _map_perma = next_map[1..].parse::<i32>().unwrap();
+
+            self.map_code = -1;
+        } else if next_map.starts_with("<") {
+            // xml
+            let xml = next_map;
+
+            self.map_code = 0;
+            self.map_name = String::from("#Module");
+            self.map_xml = xml;
+            self.map_perma = 22;
+            self.is_inverted_map = false;
+        } else {
+            return;
+        }
+    }
+
+    pub async fn start_map(&self, start: bool) -> Result {
+        for player in self.players().await {
+            if let Ok(mut player) = player.try_lock() {
+                player
+                    .send_data(
+                        tokens::send::MAP_START_TIMER,
+                        ByteArray::new().write_bool(start),
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_vanilla_map_xml(&self) -> (i32, String) {
+        let mut xml = String::new();
+
+        let file_list = std::fs::read_dir(VANILLA_MAPS_FOLDER)
+            .unwrap()
+            .map(|m| m.unwrap())
+            .collect::<Vec<std::fs::DirEntry>>();
+        let path_list = file_list
+            .iter()
+            .map(|f| f.path())
+            .collect::<Vec<std::path::PathBuf>>();
+        let code_list = path_list
+            .iter()
+            .map(|p| {
+                p.to_str()
+                    .unwrap()
+                    .split_terminator("/")
+                    .collect::<Vec<&str>>()
+                    .last()
+                    .unwrap()
+                    .split(".")
+                    .collect::<Vec<&str>>()
+                    .first()
+                    .unwrap()
+                    .parse::<i32>()
+                    .unwrap()
+            })
+            .collect::<Vec<i32>>();
+        let map_code = code_list.choose(&mut rand::thread_rng()).unwrap();
+        let file = std::fs::File::open(format!("{}{}.xml", VANILLA_MAPS_FOLDER, map_code));
+        if let Ok(mut f) = file {
+            f.read_to_string(&mut xml).unwrap();
+        }
+
+        (*map_code, xml)
+    }
+
+    pub async fn get_sync_code(&mut self) -> i32 {
+        let players = self.players().await;
+
+        if players.is_empty() {
+            if self.sync_code == -1 {
+                self.sync_code = 0;
+                self.sync_name = String::new();
+            }
+        } else {
+            let player = players.get(rand::thread_rng().gen_range(0..players.len()));
+            if let Some(player) = player {
+                let p = player.lock().await;
+
+                self.sync_code = p.id;
+                self.sync_name = p.full_name();
+            }
+        }
+
+        self.sync_code
+    }
+
+    pub async fn add_client(
+        &mut self,
+        client_: Arc<Mutex<Client>>,
+        server: Arc<Mutex<Server>>,
+    ) -> Result {
+        let mut client = client_.lock().await;
+        let server = server.lock().await;
+
+        if self.is_new {
+            client.is_dead = true;
+            server
+                .send_data_except(
+                    client.id,
+                    tokens::send::PLAYER_RESPAWN,
+                    ByteArray::new()
+                        .write_bytes(client.player_data())
+                        .write_bool(false)
+                        .write_bool(true),
+                )
+                .await?;
+        }
+        drop(client);
+
+        self.clients.push(client_);
+
+        Ok(())
+    }
+
+    pub async fn send_data(&self, tokens: (u8, u8), data: ByteArray) -> Result {
+        for player in self.players().await {
+            match player.try_lock() {
+                Ok(mut player) => player.send_data(tokens, data.clone()).await?,
+                Err(_) => continue,
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn send_data_except(
+        &self,
+        client_id: i32,
+        tokens: (u8, u8),
+        data: ByteArray,
+    ) -> Result {
+        for player in self.players().await {
+            match player.try_lock() {
+                Ok(mut player) => {
+                    if player.id != client_id {
+                        player.send_data(tokens, data.clone()).await?
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub async fn change_map(room: Arc<Mutex<Room>>) -> Result {
+    let mut r = room.lock().await;
+
+    if let Some(_) = r.change_map_interval {
+        r.change_map_interval = None;
+    }
+
+    r.round_time = 120;
+    r.select_map();
+    r.start_time = UNIX_EPOCH.elapsed().unwrap().as_millis();
+
+    let players = r.players().await;
+    drop(r);
+    for player in players {
+        let mut p = player.lock().await;
+
+        p.reset_player();
+        drop(p);
+        crate::client::start_play(player).await?;
+    }
+
+    let mut r = room.lock().await;
+    r.change_map_interval = Some(tokio::time::interval(Duration::from_secs(
+        r.round_time as u64,
+    )));
+
+    Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MapType {
+    Bootcamp,
+    Defilante,
+    Editor,
+    Custom,
+    Perm,
+    Totem,
+    Tutorial,
+    Vanilla,
+    Xml,
+}
+
+fn get_map_info<'a>(_map_code: i32) -> Option<Vec<&'a str>> {
+    Some(vec![
+        "Euzinho",
+        r#"<C><P F="7" /><Z><S><S Y="275" T="10" P="0,0,0.3,0,0,0,0,0" L="120" X="60" H="300" /><S Y="315" T="11" P="1,0,0.05,0.1,0,0,0,0" c="1" L="20" X="210" H="275" /><S Y="275" T="10" P="0,0,0.3,0,0,0,0,0" L="120" H="300" X="740" /><S Y="475" T="8" P="0,0,0.2,0.2,0,0,0,0" L="400" X="400" H="40" /><S Y="315" T="11" P="1,0,0.05,0.1,0,0,0,0" H="275" L="20" X="340" c="1" /><S Y="315" T="11" P="1,0,0.05,0.1,0,0,0,0" c="1" L="20" X="470" H="275" /><S Y="315" T="11" P="1,0,0.05,0.1,0,0,0,0" H="275" L="20" X="590" c="1" /></S><D><T Y="127" X="56" /><F Y="123" X="740" /></D><O /></Z></C>"#,
+        "22",
+    ])
+}
