@@ -10,7 +10,7 @@ use tokio::{
     sync::{mpsc, Mutex},
 };
 
-use crate::{tokens, Client, Result, Room};
+use crate::{room::MapType, tokens, Client, Result, Room};
 
 pub static CLIENTS: Lazy<Mutex<Vec<Arc<Mutex<Client>>>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static ROOMS: Lazy<Mutex<Vec<Arc<Mutex<Room>>>>> = Lazy::new(|| Mutex::new(Vec::new()));
@@ -84,7 +84,7 @@ impl Server {
         for room in rooms.iter() {
             let r = room.lock().await;
 
-            if *r.name == name && *r.lang == lang {
+            if *r.name == name && *r.lang == lang && r.map_type != MapType::Tutorial {
                 return Some(Arc::clone(room));
             }
         }
@@ -99,7 +99,7 @@ impl Server {
         for room in rooms.iter() {
             let r = room.lock().await;
 
-            if r.lang == lang {
+            if !r.name.starts_with("\x03") && r.lang == lang {
                 if let Some(ref l_r) = last_room {
                     let l_r = l_r.lock().await;
 
@@ -114,7 +114,7 @@ impl Server {
         }
 
         if last_room.is_none() {
-            let room = Arc::new(Mutex::new(Room::new("1".to_string(), lang, true)));
+            let room = Arc::new(Mutex::new(Room::new("1".to_string(), lang)));
             let r = Arc::clone(&room);
             rooms.push(room);
             return r;
@@ -243,7 +243,7 @@ pub async fn handle_client(
                                 let tokens = (c, cc);
 
                                 if tokens != (4, 4) {
-                                    log::trace!(
+                                    log::debug!(
                                         "received packet id = [{}], tokens = {:?}",
                                         client.packet_id,
                                         tokens

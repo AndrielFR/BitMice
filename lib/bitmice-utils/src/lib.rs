@@ -17,6 +17,7 @@ use rand::Rng;
 
 const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
+#[derive(Clone)]
 pub enum OldData {
     String(String),
     Bool(bool),
@@ -98,12 +99,14 @@ pub fn language_code(code: &str) -> &str {
         "eesti keel" => "et",
         "español" => "es",
         "ekakairũ naoero" => "na",
+        // TODO: add all langues
         "english" | _ => "en",
     }
 }
 
 pub fn language_id(lang: &str) -> i8 {
     match lang {
+        // TODO: add all langues
         "en" | _ => 1,
     }
 }
@@ -124,7 +127,7 @@ pub fn language_info(lang: &str) -> (&str, &str) {
         "et" => ("Eesti keel", "ee"),
         "es" => ("Español", "es"),
         "na" => ("Ekakairũ Naoero", "nr"),
-        // TODO: add more langues
+        // TODO: add all langues
         "en" | _ => ("English", "gb"),
     }
 }

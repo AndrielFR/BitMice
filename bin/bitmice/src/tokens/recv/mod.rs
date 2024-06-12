@@ -5,6 +5,7 @@ mod informations;
 mod language;
 mod login;
 mod player;
+mod room;
 mod sync;
 
 use std::sync::Arc;
@@ -24,6 +25,7 @@ pub async fn parse_tokens(
 
     match c {
         4 => sync::parse_token(client, server, cc, data, packet_id).await,
+        5 => room::parse_token(client, server, cc, data, packet_id).await,
         8 => player::parse_token(client, server, cc, data, packet_id).await,
         26 => login::parse_token(client, server, cc, data, packet_id).await,
         28 => informations::parse_token(client, server, cc, data, packet_id).await,

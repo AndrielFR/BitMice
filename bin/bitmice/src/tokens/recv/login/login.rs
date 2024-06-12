@@ -13,7 +13,7 @@ pub async fn handle(
     mut data: ByteArray,
     _packet_id: u8,
 ) -> Result {
-    let identity = data.read_utf();
+    let mut identity = data.read_utf();
     let password = data.read_utf();
     let _url = data.read_utf();
     let mut start_room = data.read_utf();
@@ -34,22 +34,18 @@ pub async fn handle(
             .await?;
         return Ok(());
     } else if password.is_empty() {
-        let mut name = match identity.is_empty() {
-            true => "Souris",
-            false => &identity,
-        }
-        .to_string();
-        if !name.starts_with("+") {
-            name = format!("*{}", name);
+        if !identity.starts_with("+") {
+            identity = format!("*{}", identity);
         }
 
-        start_room = format!("\x03[Tutorial] {}", name);
+        start_room = format!("\x03[Tutorial] {}", identity);
 
-        client.name = name;
         client.priv_level = 0;
         client.time_played = UNIX_EPOCH.elapsed().unwrap().as_millis() as i64;
         client.is_guest = true;
     }
+
+    client.name = identity;
 
     client.id = server.new_player_id();
     drop(server);
@@ -153,15 +149,13 @@ pub async fn handle(
     let room = Arc::clone(&client.room.as_ref().unwrap());
     let mut r = room.lock().await;
     drop(client);
-    r.add_client(Arc::clone(&client_), Arc::clone(&server_))
-        .await?;
+    r.add_client(Arc::clone(&client_)).await?;
+    let is_new = r.is_new;
+    drop(r);
+    crate::client::start_play(Arc::clone(&client_)).await?;
 
-    if r.is_new {
-        drop(r);
-        room::change_map(Arc::clone(&room)).await?;
-    } else {
-        // start play
-        crate::client::start_play(Arc::clone(&client_)).await?;
+    if is_new {
+        room::trigger(Arc::clone(&room)).await?;
     }
 
     // send anchors

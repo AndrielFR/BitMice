@@ -25,11 +25,6 @@ pub async fn handle(
             .write_u8(client.ping.0)
             .write_bool(client.last_ping);
         client.send_data(tokens::send::PING, b).await?;
-
-        client.ping.0 += 1;
-        if client.ping.0 == 31 {
-            client.ping.0 = 0;
-        }
     }
 
     Ok(())

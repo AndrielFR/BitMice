@@ -8,7 +8,10 @@ use tokio::{
     sync::{mpsc::Sender, Mutex},
 };
 
-use crate::{room::MapType, tokens, Result, Room, Server};
+use crate::{
+    room::{MapType, RoomType},
+    tokens, Result, Room, Server,
+};
 use bitmice_utils::{encode_xml, ByteArray, OldData};
 
 #[derive(Debug)]
@@ -32,14 +35,16 @@ pub struct Client {
     pub auth_key: i32,
     pub last_response: u128,
     pub(super) packet_id: u8,
-    pub position_x: u32,
-    pub position_y: u32,
+    pub position_x: u64,
+    pub position_y: u64,
     pub priv_level: i8,
     pub time_played: i64,
+    pub score: i16,
     pub speed_x: u16,
     pub speed_y: u16,
     pub start_time: u128,
 
+    pub has_cheese: bool,
     pub(super) is_closed: bool,
     pub is_dead: bool,
     pub is_guest: bool,
@@ -83,12 +88,14 @@ impl Client {
             position_y: 0,
             priv_level: 1,
             time_played: 0,
+            score: 0,
             speed_x: 0,
             speed_y: 0,
             start_time: 0,
 
+            has_cheese: false,
             is_closed: false,
-            is_dead: false,
+            is_dead: true,
             is_guest: false,
             is_jumping: false,
             is_moving_right: false,
@@ -122,8 +129,8 @@ impl Client {
             .write_i32(self.id) // player code
             .write_bool(false) // is shaman
             .write_bool(self.is_dead) // is dead
-            .write_i16(0) // player score
-            .write_bool(false) // has cheese
+            .write_i16(self.score) // player score
+            .write_bool(self.has_cheese) // has cheese
             .write_i16(5) // title number
             .write_i8(1) // title stars
             .write_i8(1) // gender
@@ -140,13 +147,14 @@ impl Client {
         let server_ = Arc::clone(&self.server);
         let server = server_.lock().await;
 
+        // get room
         let room = match server.get_room(name.to_string(), self.lang.clone()).await {
             Some(r) => r,
             None => {
                 if name.is_empty() {
                     server.get_recommended_room(self.lang.clone()).await
                 } else {
-                    let room = Room::new(name.to_string(), self.lang.clone(), true);
+                    let room = Room::new(name.to_string(), self.lang.clone());
                     let r = Arc::new(Mutex::new(room));
                     server.add_room(Arc::clone(&r)).await;
                     r
@@ -155,13 +163,14 @@ impl Client {
         };
         drop(server);
 
+        // parse room's name
         let mut name = name.replace("<", "&lt;");
         if !name.starts_with("*") && !(name.len() > 3 && name.contains("-") && self.priv_level >= 7)
         {
             name = format!("{}-{}", self.lang, name);
         }
 
-        let special_rooms = vec!["\x03[Tutorial] "];
+        let special_rooms = vec!["\x03[Editeur] ", "\x03[Totem] ", "\x03[Tutorial] "];
         for special_room in special_rooms {
             if name.starts_with(special_room) && !name.contains(&self.full_name()) {
                 name = format!("{}-{}", self.lang, self.full_name());
@@ -169,7 +178,6 @@ impl Client {
         }
 
         let mut standard_room = false;
-        let room_name = &name[3..];
         let default_rooms = vec![
             "vanilla",
             "survivor",
@@ -180,17 +188,39 @@ impl Client {
             "village",
         ];
         for default_room in default_rooms {
-            if room_name.starts_with(default_room) || room_name.trim().parse::<i32>().is_ok() {
+            if name.starts_with(default_room) || name.trim().parse::<i32>().is_ok() {
                 standard_room = true;
             }
         }
 
+        // let room be int
+        if name.starts_with("*") {
+            let mut r = room.lock().await;
+
+            r.name = name[1..].to_string();
+            r.lang = "int".to_string();
+        }
+
+        // enter room
         self.send_data(
             tokens::send::ENTER_ROOM,
             ByteArray::new()
                 .write_bool(standard_room)
                 .write_utf(&name)
-                .write_utf(if name.starts_with("*") { "int" } else { &name }),
+                .write_utf(if name.starts_with("*") {
+                    "int"
+                } else {
+                    &self.lang
+                }),
+        )
+        .await?;
+
+        // update client game type
+        self.send_data(tokens::send::ROOM_SERVER, ByteArray::new().write_i8(0))
+            .await?;
+        self.send_data(
+            tokens::send::ROOM_TYPE,
+            ByteArray::new().write_i8(if name.contains("music") { 11 } else { 4 }),
         )
         .await?;
 
@@ -201,7 +231,11 @@ impl Client {
     }
 
     pub fn reset_player(&mut self) {
+        self.has_cheese = false;
         self.is_dead = false;
+        self.is_jumping = false;
+        self.is_moving_right = false;
+        self.is_moving_left = false;
     }
 
     pub async fn load_map(&mut self, new_map: bool, custom_map: bool) -> Result {
@@ -261,6 +295,29 @@ impl Client {
         Ok(())
     }
 
+    pub async fn get_cheese(&mut self) -> Result {
+        let mut room = self.room.as_mut().unwrap().lock().await;
+
+        room.can_change_map = true;
+        if !self.has_cheese {
+            room.send_data(
+                tokens::send::PLAYER_GET_CHEESE,
+                ByteArray::new().write_i32(self.id).write_bool(true),
+            )
+            .await?;
+            self.has_cheese = true;
+
+            let map_type = room.map_type;
+            drop(room);
+            if map_type == MapType::Tutorial {
+                self.send_data(tokens::send::TUTORIAL, ByteArray::new().write_i8(1))
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn send_data(&mut self, tokens: (u8, u8), data: ByteArray) -> Result {
         if self.is_closed {
             return Ok(());
@@ -296,7 +353,7 @@ impl Client {
         }
 
         let mut p = ByteArray::new()
-            .write_i8(1)
+            .write_u8(1)
             .write_u8(tokens.0)
             .write_u8(tokens.1);
 
@@ -328,6 +385,23 @@ impl Client {
     }
 }
 
+pub async fn die(client_: Arc<Mutex<Client>>) -> Result {
+    let mut client = client_.lock().await;
+
+    client.score += 1;
+    client.has_cheese = false;
+    client.is_dead = true;
+
+    let room = client.room.clone();
+    let r = room.as_ref().unwrap().lock().await;
+
+    let b = vec![OldData::Integer(client.id), OldData::Short(client.score)];
+    drop(client);
+    r.send_old_data(tokens::old::send::PLAYER_DIED, b).await?;
+
+    Ok(())
+}
+
 pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
     let mut client = client_.lock().await;
 
@@ -348,8 +422,8 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
 
     // update player list
     let room = client.room.clone();
-    let r = room.as_ref().unwrap().lock().await;
     drop(client);
+    let mut r = room.as_ref().unwrap().lock().await;
     let players = r.players().await;
 
     let mut data = ByteArray::new().write_i16(players.len() as i16);
@@ -359,14 +433,11 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
         data = data.write_bytes(player.player_data());
     }
 
-    drop(r);
     let mut client = client_.lock().await;
     client.send_data(tokens::send::PLAYER_LIST, data).await?;
+    drop(client);
 
     // sync users
-    let mut room = client.room.clone();
-    let mut r = room.as_mut().unwrap().lock().await;
-    drop(client);
     let sync_code = r.get_sync_code().await;
     drop(r);
     let mut client = client_.lock().await;
@@ -390,8 +461,8 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
     if is_dead
         || r.map_type == MapType::Tutorial
         || r.map_type == MapType::Totem
-        || r.map_type == MapType::Bootcamp
-        || r.map_type == MapType::Defilante
+        || r.room_type == RoomType::Bootcamp
+        || r.room_type == RoomType::Defilante
         || r.players_count().await < 2
     {
         r.start_map(false).await?;

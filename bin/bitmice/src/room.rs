@@ -8,11 +8,11 @@ use std::{
     vec,
 };
 
-use bitmice_utils::ByteArray;
+use bitmice_utils::{ByteArray, OldData};
 use rand::{seq::SliceRandom, Rng};
-use tokio::{sync::Mutex, time::Interval};
+use tokio::sync::Mutex;
 
-use crate::{tokens, Client, Result, Server};
+use crate::{tokens, Client, Result};
 
 const VANILLA_MAPS_FOLDER: &str = "./assets/maps/vanilla/";
 
@@ -29,20 +29,22 @@ pub struct Room {
     pub map_perma: i8,
     pub round_time: i16,
     pub start_time: u128,
+    pub time_change_map: i16,
     pub last_round_code: i8,
     sync_code: i32,
 
+    pub can_change_map: bool,
     pub is_new: bool,
     pub is_inverted_map: bool,
     pub is_specific_map: bool,
 
     clients: Vec<Arc<Mutex<Client>>>,
     pub map_type: MapType,
-    pub change_map_interval: Option<Interval>,
+    pub room_type: RoomType,
 }
 
 impl Room {
-    pub fn new(name: String, lang: String, is_new: bool) -> Self {
+    pub fn new(name: String, lang: String) -> Self {
         Self {
             name,
             map_name: String::from("BitMice"),
@@ -55,16 +57,18 @@ impl Room {
             map_perma: 0,
             round_time: 0,
             start_time: 0,
+            time_change_map: 0,
             last_round_code: -1,
             sync_code: -1,
 
-            is_new,
+            can_change_map: true,
+            is_new: true,
             is_inverted_map: false,
             is_specific_map: false,
 
             clients: Vec::new(),
             map_type: MapType::Vanilla,
-            change_map_interval: None,
+            room_type: RoomType::Vanilla,
         }
     }
 
@@ -80,6 +84,20 @@ impl Room {
 
     pub async fn players_count(&self) -> usize {
         self.players().await.len()
+    }
+
+    async fn alive_count(&self) -> i16 {
+        let mut count = 0;
+
+        for player in self.players().await {
+            let p = player.lock().await;
+
+            if !p.is_dead {
+                count += 1;
+            }
+        }
+
+        count
     }
 
     fn select_map(&mut self) {
@@ -145,16 +163,11 @@ impl Room {
     }
 
     pub async fn start_map(&self, start: bool) -> Result {
-        for player in self.players().await {
-            if let Ok(mut player) = player.try_lock() {
-                player
-                    .send_data(
-                        tokens::send::MAP_START_TIMER,
-                        ByteArray::new().write_bool(start),
-                    )
-                    .await?;
-            }
-        }
+        self.send_data(
+            tokens::send::MAP_START_TIMER,
+            ByteArray::new().write_bool(false), // use start variable
+        )
+        .await?;
 
         Ok(())
     }
@@ -217,28 +230,21 @@ impl Room {
         self.sync_code
     }
 
-    pub async fn add_client(
-        &mut self,
-        client_: Arc<Mutex<Client>>,
-        server: Arc<Mutex<Server>>,
-    ) -> Result {
-        let mut client = client_.lock().await;
-        let server = server.lock().await;
+    pub async fn add_client(&mut self, client_: Arc<Mutex<Client>>) -> Result {
+        if !self.is_new {
+            let mut client = client_.lock().await;
 
-        if self.is_new {
             client.is_dead = true;
-            server
-                .send_data_except(
-                    client.id,
-                    tokens::send::PLAYER_RESPAWN,
-                    ByteArray::new()
-                        .write_bytes(client.player_data())
-                        .write_bool(false)
-                        .write_bool(true),
-                )
+            let client_id = client.id;
+            let b = ByteArray::new()
+                .write_bytes(client.player_data())
+                .write_bool(false)
+                .write_bool(true);
+            drop(client);
+
+            self.send_data_except(client_id, tokens::send::PLAYER_RESPAWN, b)
                 .await?;
         }
-        drop(client);
 
         self.clients.push(client_);
 
@@ -275,17 +281,58 @@ impl Room {
 
         Ok(())
     }
+
+    pub async fn send_old_data(&self, tokens: (u8, u8), data: Vec<OldData>) -> Result {
+        for player in self.players().await {
+            match player.try_lock() {
+                Ok(mut player) => player.send_old_data(tokens, data.clone()).await?,
+                Err(_) => continue,
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub async fn change_map(room: Arc<Mutex<Room>>) -> Result {
     let mut r = room.lock().await;
 
-    if let Some(_) = r.change_map_interval {
-        r.change_map_interval = None;
-    }
+    r.sync_name = String::new();
 
     r.round_time = 120;
-    r.select_map();
+    r.last_round_code = (r.last_round_code + 1) % 127;
+    r.sync_code = -1;
+
+    r.can_change_map = true;
+
+    if r.name.starts_with("\x03[Editeur] ") {
+        r.map_type = MapType::Editor;
+        r.round_time = 0;
+    } else if r.name.starts_with("\x03[Tutorial] ") {
+        r.map_code = 900;
+        r.is_specific_map = true;
+        r.map_type = MapType::Tutorial;
+        r.round_time = 0;
+    } else if r.name.starts_with("\x03[Totem] ") {
+        r.map_code = 444;
+        r.is_specific_map = true;
+        r.map_type = MapType::Totem;
+        r.round_time = 0;
+    } else {
+        r.select_map();
+
+        if r.name.starts_with("bootcamp") {
+            r.room_type = RoomType::Bootcamp;
+            r.round_time = 360;
+        } else if r.name.starts_with("defilante") {
+            r.room_type = RoomType::Defilante;
+        } else if r.name.starts_with("racing") {
+            r.room_type = RoomType::Racing;
+            r.round_time = 63;
+        } else if r.name.starts_with("survivor") {
+            r.room_type = RoomType::Survivor;
+        }
+    }
     r.start_time = UNIX_EPOCH.elapsed().unwrap().as_millis();
 
     let players = r.players().await;
@@ -298,25 +345,66 @@ pub async fn change_map(room: Arc<Mutex<Room>>) -> Result {
         crate::client::start_play(player).await?;
     }
 
-    let mut r = room.lock().await;
-    r.change_map_interval = Some(tokio::time::interval(Duration::from_secs(
-        r.round_time as u64,
-    )));
+    Ok(())
+}
+
+pub async fn trigger(room: Arc<Mutex<Room>>) -> Result {
+    tokio::spawn(async move {
+        loop {
+            let mut r = room.lock().await;
+
+            r.round_time -= 1;
+
+            let alive_count = r.alive_count().await;
+            let round_time = r.round_time;
+
+            let can_change_map = r.can_change_map;
+            let is_new = r.is_new;
+
+            let map_type = r.map_type;
+            drop(r);
+
+            if is_new || alive_count == 0 || can_change_map && round_time <= 0 {
+                if is_new {
+                    let mut r = room.lock().await;
+                    r.is_new = false;
+                    drop(r);
+                }
+
+                if map_type == MapType::Editor
+                    || map_type == MapType::Totem
+                    || map_type == MapType::Tutorial
+                {
+                    break;
+                }
+                crate::room::change_map(Arc::clone(&room)).await.unwrap();
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
 
     Ok(())
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum MapType {
-    Bootcamp,
-    Defilante,
-    Editor,
     Custom,
+    Editor,
     Perm,
     Totem,
     Tutorial,
     Vanilla,
     Xml,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum RoomType {
+    Bootcamp,
+    Defilante,
+    Racing,
+    Survivor,
+    Vanilla,
 }
 
 fn get_map_info<'a>(_map_code: i32) -> Option<Vec<&'a str>> {

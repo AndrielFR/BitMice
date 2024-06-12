@@ -32,5 +32,6 @@ pub async fn handle(
     }
 
     client.send_data(tokens::send::LANGUAGE_LIST, b).await?;
+
     Ok(())
 }

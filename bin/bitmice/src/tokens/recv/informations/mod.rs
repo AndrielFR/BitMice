@@ -4,6 +4,7 @@
 mod computer_info;
 mod correct_version;
 mod game_log;
+mod player_ping;
 
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ pub async fn parse_token(
     match cc {
         1 => correct_version::handle(client, server, data, packet_id).await,
         4 => game_log::handle(client, server, data, packet_id).await,
+        6 => player_ping::handle(client, server, data, packet_id).await,
         17 => computer_info::handle(client, server, data, packet_id).await,
         _ => {
             log::debug!("cc = [{}] not identified\ndata = [{:?}]", cc, data);

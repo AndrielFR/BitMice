@@ -31,8 +31,8 @@ pub async fn handle(
 
     let mut client = client.lock().await;
 
-    client.position_x = position_x * 800 / 2700;
-    client.position_y = position_y * 800 / 2700;
+    client.position_x = position_x as u64 * 800 / 2700;
+    client.position_y = position_y as u64 * 800 / 2700;
     client.speed_x = speed_x;
     client.speed_y = speed_y;
     client.is_jumping = is_jumping;
