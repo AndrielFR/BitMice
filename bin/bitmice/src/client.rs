@@ -21,7 +21,6 @@ pub struct Client {
     pub(super) writer: Arc<Mutex<OwnedWriteHalf>>,
     pub(super) server: Arc<Mutex<Server>>,
     pub room: Option<Arc<Mutex<Room>>>,
-    pub(super) received_data: ByteArray,
     pub(super) data_sender: Option<Sender<ByteArray>>,
 
     pub name: String,
@@ -70,7 +69,6 @@ impl Client {
             writer,
             server,
             room: None,
-            received_data: vec![0].into(),
             data_sender: None,
 
             name: String::from("**unlogged"),

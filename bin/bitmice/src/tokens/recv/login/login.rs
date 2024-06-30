@@ -4,12 +4,13 @@
 use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
 
 use crate::{room, tokens, Client, Result, Server};
-use bitmice_utils::{language_id, ByteArray, OldData};
+use bitmice_utils::{generate_captcha, language_id, ByteArray, OldData};
+use rand::{thread_rng, Rng};
 use tokio::sync::Mutex;
 
 pub async fn handle(
-    client_: Arc<Mutex<Client>>,
-    server_: Arc<Mutex<Server>>,
+    client: Arc<Mutex<Client>>,
+    server: Arc<Mutex<Server>>,
     mut data: ByteArray,
     _packet_id: u8,
 ) -> Result {
@@ -19,11 +20,11 @@ pub async fn handle(
     let mut start_room = data.read_utf();
     let _result_key = data.read_i32();
 
-    let mut client = client_.lock().await;
-    let mut server = server_.lock().await;
+    let mut s = server.lock().await;
 
     if identity.is_empty() && password.is_empty() || identity.len() < 3 {
-        client // invalid account
+        let mut c = client.lock().await;
+        c // invalid account
             .send_data(
                 tokens::send::LOGIN_RESULT,
                 ByteArray::new()
@@ -33,6 +34,33 @@ pub async fn handle(
             )
             .await?;
         return Ok(());
+    } else if s.get_player(identity.clone()).await.is_some() {
+        let mut c = client.lock().await;
+
+        if password.is_empty(){
+            let random_name = generate_captcha(thread_rng().gen_range(6..16)).to_lowercase();
+            c // already connected, choose another name
+                .send_data(
+                    tokens::send::LOGIN_RESULT,
+                    ByteArray::new()
+                        .write_i8(3)
+                        .write_utf(&random_name)
+                        .write_utf(""),
+                )
+                .await?;
+        } else {
+            c // already connected
+                .send_data(
+                    tokens::send::LOGIN_RESULT,
+                    ByteArray::new()
+                        .write_i8(1)
+                        .write_utf(&identity)
+                        .write_utf(&password),
+                )
+                .await?;
+        }
+
+        return Ok(());
     } else if password.is_empty() {
         if !identity.starts_with("+") {
             identity = format!("*{}", identity);
@@ -40,17 +68,41 @@ pub async fn handle(
 
         start_room = format!("\x03[Tutorial] {}", identity);
 
-        client.priv_level = 0;
-        client.time_played = UNIX_EPOCH.elapsed().unwrap().as_millis() as i64;
-        client.is_guest = true;
+        let mut c = client.lock().await;
+        c.priv_level = 0;
+        c.time_played = UNIX_EPOCH.elapsed().unwrap().as_millis() as i64;
+        c.is_guest = true;
     }
 
-    client.name = identity;
+    let mut c = client.lock().await;
+    c.name = identity;
 
-    client.id = server.new_player_id();
-    drop(server);
+    c.id = s.new_player_id();
+    drop(c);
+    drop(s);
 
-    // player identification
+    identification(Arc::clone(&client)).await?;
+    login(Arc::clone(&client)).await?;
+
+    // enter room
+    let mut c = client.lock().await;
+    c.enter_room(&start_room).await?;
+    drop(c);
+
+    add_to_room(Arc::clone(&client)).await?;
+
+    // send anchors
+    let mut c = client.lock().await;
+    c
+        .send_old_data(tokens::old::send::ANCHORS, vec![])
+        .await?;
+
+    Ok(())
+}
+
+async fn identification(client: Arc<Mutex<Client>>) -> Result {
+    let mut client = client.lock().await;
+
     let mut p = ByteArray::new();
     let mut perms = Vec::new();
     let priv_authorization = HashMap::from([
@@ -99,9 +151,13 @@ pub async fn handle(
         .write_i16(0);
     client
         .send_data(tokens::send::PLAYER_IDENTIFICATION, data)
-        .await?;
+        .await
+}
 
-    // player login
+
+async fn login(client: Arc<Mutex<Client>>) -> Result {
+    let mut client = client.lock().await;
+
     let old_data = vec![
         OldData::String(client.full_name()),
         OldData::Integer(client.id),
@@ -141,28 +197,23 @@ pub async fn handle(
             )
             .await?;
     }
+     Ok(())
+}
 
-    // enter room
-    client.enter_room(&start_room).await?;
-
-    // add player to room
-    let room = Arc::clone(&client.room.as_ref().unwrap());
+async fn add_to_room(client: Arc<Mutex<Client>>) -> Result {
+    let c = client.lock().await;
+    let room = Arc::clone(&c.room.as_ref().unwrap());
     let mut r = room.lock().await;
-    drop(client);
-    r.add_client(Arc::clone(&client_)).await?;
+    drop(c);
+
+    r.add_client(Arc::clone(&client)).await?;
     let is_new = r.is_new;
     drop(r);
-    crate::client::start_play(Arc::clone(&client_)).await?;
+    crate::client::start_play(Arc::clone(&client)).await?;
 
     if is_new {
         room::trigger(Arc::clone(&room)).await?;
     }
-
-    // send anchors
-    let mut client = client_.lock().await;
-    client
-        .send_old_data(tokens::old::send::ANCHORS, vec![])
-        .await?;
 
     Ok(())
 }

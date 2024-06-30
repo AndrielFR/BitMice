@@ -3,7 +3,7 @@
 
 use bitmice_utils::{bytes_to_string, str_to_bytes, ByteArray};
 use once_cell::sync::Lazy;
-use std::{io, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration, usize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
@@ -15,12 +15,24 @@ use crate::{room::MapType, tokens, Client, Result, Room};
 pub static CLIENTS: Lazy<Mutex<Vec<Arc<Mutex<Client>>>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static ROOMS: Lazy<Mutex<Vec<Arc<Mutex<Room>>>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Server {
+    pub ckey: String,
+
     pub last_player_id: i32,
+    pub version: i16,
 }
 
 impl Server {
+    pub fn new(ckey: &str, version: i16) -> Self {
+        Self {
+            ckey: ckey.to_string(),
+
+            last_player_id: 0,
+            version,
+        }
+    }
+
     pub fn new_player_id(&mut self) -> i32 {
         self.last_player_id += 1;
         self.last_player_id
@@ -168,116 +180,121 @@ pub async fn handle_client(
         let client: Arc<Mutex<Client>> = Arc::clone(&player);
         let mut client = client.lock().await;
 
-        let (data_tx, mut data_rx) = mpsc::channel(10);
+        let (data_tx, mut data_rx) = mpsc::channel(16);
         client.data_sender = Some(data_tx.clone());
         drop(client);
 
-        // reader
+        // writer
+        let writer = writer.clone();
         tokio::spawn(async move {
             loop {
-                let mut buf = vec![0; 2048];
+                let data = match data_rx.recv().await {
+                    Some(d) => d,
+                    None => break,
+                };
 
-                match reader.lock().await.read(&mut buf[..]).await {
-                    Ok(n) => {
-                        if n == 0 {
-                            break;
-                        }
-
-                        let mut data: ByteArray = buf.into();
-                        if data.is_empty() {
-                            continue;
-                        }
-
-                        // parser
-                        let player = Arc::clone(&player);
-                        let data_tx = data_tx.clone();
-                        tokio::spawn(async move {
-                            let mut client = player.lock().await;
-
-                            if client.is_closed {
-                                return;
-                            }
-
-                            log::trace!("received data = [{}]", bytes_to_string(data.as_bytes()));
-                            if bytes_to_string(data.as_bytes()).contains("<policy-file-request/>") {
-                                let policy = str_to_bytes("<cross-domain-policy><allow-access-from domain=\"*\" to-ports=\"*\"/></cross-domain-policy>");
-                                let _ = data_tx.send(ByteArray::with(policy)).await.unwrap();
-                                tokio::time::sleep(Duration::from_secs(2)).await;
-                                client.close().await.unwrap();
-                            }
-
-                            let mut id = 0;
-                            let mut length = 0;
-
-                            let mut byte = data.read_u8() & 0xFF;
-                            length = length | ((byte & 0x7F) << (id * 7));
-                            id += 1;
-
-                            while (byte & 128) == 128 && id < 5 {
-                                if data.is_empty() {
-                                    continue;
-                                }
-
-                                byte = data.read_u8() & 0xFF;
-                                length = length | ((byte & 0x7F) << (id * 7));
-                                id += 1;
-                            }
-
-                            length += 1;
-
-                            if length == 0 {
-                                return;
-                            } else if length > (data.len() as u8) {
-                                length = data.len() as u8;
-                            }
-
-                            data = data.read(length.into());
-                            client.received_data = data.clone();
-
-                            let packet_id = data.read_u8();
-                            client.packet_id = (client.packet_id + 1) % 100;
-
-                            let c = data.read_u8();
-                            let cc = data.read_u8();
-                            if c > 0 && cc > 0 {
-                                let tokens = (c, cc);
-
-                                if tokens != (4, 4) {
-                                    log::debug!(
-                                        "received packet id = [{}], tokens = {:?}",
-                                        client.packet_id,
-                                        tokens
-                                    );
-                                }
-
-                                if tokens != (26, 26) {
-                                    client.update_last_response();
-                                }
-
-                                let server = Arc::clone(&client.server);
-                                drop(client);
-                                let client = Arc::clone(&player);
-
-                                tokens::recv::parse_tokens(client, server, tokens, data, packet_id)
-                                    .await
-                                    .unwrap();
-                            }
-                        });
-                    }
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                    Err(e) => log::error!("error reading data: {:?}", e),
+                if let Err(_) = writer.lock().await.write_all(data.as_bytes()).await {
+                    log::error!("failed to write data");
+                    break;
                 }
             }
         });
 
-        // writer
+        // reader
+        let reader = reader.clone();
         tokio::spawn(async move {
-            while let Some(data) = data_rx.recv().await {
-                match writer.lock().await.write_all(data.as_bytes()).await {
-                    Ok(_) => {}
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => continue,
-                    Err(e) => log::error!("error writing data: {:?}", e),
+            loop {
+                let mut buffer = vec![0u8; 2048];
+
+                match reader.lock().await.read(&mut buffer).await {
+                    Ok(s) => {
+                        if s == 0 {
+                            break;
+                        }
+
+                        buffer.truncate(s);
+                    }
+                    Err(_) => {
+                        log::error!("failed to read data");
+                        break;
+                    }
+                };
+
+                let mut data = ByteArray::from(buffer.into());
+                if data.is_empty() {
+                    continue;
                 }
+
+                // parser
+                let player = Arc::clone(&player);
+                let data_tx = data_tx.clone();
+                tokio::spawn(async move {
+                    let mut client = player.lock().await;
+
+                    if client.is_closed {
+                        return;
+                    }
+
+                    log::trace!("received data = [{}]", bytes_to_string(data.as_bytes()));
+                    if bytes_to_string(data.as_bytes()).contains("<policy-file-request/>") {
+                        let policy = str_to_bytes("<cross-domain-policy><allow-access-from domain=\"*\" to-ports=\"*\"/></cross-domain-policy>");
+                        let _ = data_tx.send(ByteArray::with(policy)).await.unwrap();
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        client.close().await.unwrap();
+                    }
+                    drop(client);
+
+                    let mut length = 0;
+                    for i in 0..10 {
+                        if data.is_empty() {
+                            return;
+                        }
+
+                        let byte = data.read_u8() & 255;
+                        length |= (byte & 127) << (i * 7);
+                        if !((byte & 128) == 128) && i < 5 {
+                            length += 1;
+                            break;
+                        }
+                    }
+
+                    let mut length = length as usize;
+                    if length == 0 {
+                        return;
+                    } else if length > data.len() {
+                        length = data.len();
+                    }
+
+                    data = data.read(length as usize);
+                    let mut client = player.lock().await;
+                    let packet_id = data.read_u8();
+                    client.packet_id = (client.packet_id + 1) % 100;
+
+                    let tokens = (data.read_u8(), data.read_u8());
+
+                    if tokens.0 > 0 && tokens.1 > 0 {
+                        if tokens != (4, 4) {
+                            log::debug!(
+                                "received packet id = [{}], tokens = {:?} from {}",
+                                client.packet_id,
+                                tokens,
+                                client.full_name(),
+                            );
+                        }
+
+                        if tokens != (26, 26) {
+                            client.update_last_response();
+                        }
+
+                        let server = Arc::clone(&client.server);
+                        drop(client);
+                        let client = Arc::clone(&player);
+
+                        tokens::recv::parse_tokens(client, server, tokens, data, packet_id)
+                            .await
+                            .unwrap();
+                    }
+                });
             }
         });
     });

@@ -8,23 +8,23 @@ use bitmice_utils::ByteArray;
 use tokio::sync::Mutex;
 
 pub async fn handle(
-    client_: Arc<Mutex<Client>>,
+    client: Arc<Mutex<Client>>,
     _server: Arc<Mutex<Server>>,
     mut data: ByteArray,
     _packet_id: u8,
 ) -> Result {
     let round_code = data.read_i32();
-    let _loc_1 = data.read_i8();
 
-    let client = client_.lock().await;
-    let room = client.room.as_ref().unwrap().lock().await;
+    let c = client.lock().await;
+    let room = c.room.as_ref().unwrap();
+    let r = room.lock().await;
 
-    let last_round_code = room.last_round_code as i32;
-    drop(room);
-    drop(client);
+    let last_round_code = r.last_round_code as i32;
+    drop(r);
+    drop(c);
 
     if round_code == last_round_code {
-        client::die(Arc::clone(&client_)).await?;
+        client::die(Arc::clone(&client)).await?;
     }
 
     Ok(())

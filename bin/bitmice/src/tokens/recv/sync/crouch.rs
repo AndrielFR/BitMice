@@ -25,6 +25,8 @@ pub async fn handle(
         .write_i8(crouch)
         .write_i8(0);
 
+    drop(client);
+
     r.send_data(tokens::send::CROUCH, b).await?;
 
     Ok(())

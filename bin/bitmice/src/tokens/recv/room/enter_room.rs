@@ -11,7 +11,7 @@ use bitmice_utils::ByteArray;
 use tokio::sync::Mutex;
 
 pub async fn handle(
-    client_: Arc<Mutex<Client>>,
+    client: Arc<Mutex<Client>>,
     server: Arc<Mutex<Server>>,
     mut data: ByteArray,
     _packet_id: u8,
@@ -20,53 +20,53 @@ pub async fn handle(
     let mut room_name = data.read_utf();
     let auto_select = data.read_bool();
 
-    let client = client_.lock().await;
+    let c = client.lock().await;
 
     if auto_select || room_name.is_empty() {
-        let server = server.lock().await;
-        let room = server.get_recommended_room(community.clone()).await;
+        let s = server.lock().await;
+        let room = s.get_recommended_room(community.clone()).await;
         let mut r = room.lock().await;
 
         room_name = r.name.clone();
 
-        drop(client);
-        r.add_client(Arc::clone(&client_)).await?;
+        drop(c);
+        r.add_client(Arc::clone(&client)).await?;
 
         let is_new = r.is_new;
 
         drop(r);
-        drop(server);
+        drop(s);
 
-        let mut client = client_.lock().await;
-        client.enter_room(&room_name).await?;
-        drop(client);
-        crate::client::start_play(Arc::clone(&client_)).await?;
+        let mut c = client.lock().await;
+        c.enter_room(&room_name).await?;
+        drop(c);
+        crate::client::start_play(Arc::clone(&client)).await?;
 
         if is_new {
             room::trigger(Arc::clone(&room)).await?;
         }
     }
 
-    let client = client_.lock().await;
-    let room = client.room.clone();
+    let c = client.lock().await;
+    let room = c.room.clone();
     let room = room.as_ref().unwrap();
     let mut r = room.lock().await;
-    if !(room_name == r.name && client.lang == r.lang
+    if !(room_name == r.name && c.lang == r.lang
         || r.map_type == MapType::Editor
         || room_name.len() > 64)
     {
-        drop(client);
-        r.add_client(Arc::clone(&client_)).await?;
+        drop(c);
+        r.add_client(Arc::clone(&client)).await?;
 
         let is_new = r.is_new;
         drop(r);
 
-        let mut client = client_.lock().await;
-        client
+        let mut c = client.lock().await;
+        c
             .enter_room(&format!("{}-{}", community, room_name))
             .await?;
-        drop(client);
-        crate::client::start_play(Arc::clone(&client_)).await?;
+        drop(c);
+        crate::client::start_play(Arc::clone(&client)).await?;
 
         if is_new {
             room::trigger(Arc::clone(&room)).await?;

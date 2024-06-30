@@ -1,0 +1,14 @@
+[bulle]
+ports = [1801, 2801]
+
+[server]
+name = "BitMice"
+ports = [11801, 12801, 13801, 14801]
+last_player_id = 0
+
+[events.fishing]
+enabled = true
+start_time = 21312
+end_time = 2030103
+room_types = ["all"]
+has_specific_map = true

@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 pub async fn handle(
     client: Arc<Mutex<Client>>,
-    _server: Arc<Mutex<Server>>,
+    server: Arc<Mutex<Server>>,
     mut data: ByteArray,
     _packet_id: u8,
 ) -> Result {
@@ -20,12 +20,13 @@ pub async fn handle(
     let stand = data.read_utf();
 
     let mut client = client.lock().await;
+    let server = server.lock().await;
 
     let ip_address = client.address().to_string();
 
     log::debug!("new client on [{}] using [{}]", ip_address, stand);
 
-    if version != 616 || ckey != "yAdByj" {
+    if version != server.version || ckey != server.ckey {
         log::debug!(
             "[{}] disconnected by using incorrect version = [{}] and/or ckey = [{}]",
             ip_address,

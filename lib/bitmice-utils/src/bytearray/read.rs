@@ -76,6 +76,23 @@ impl ByteArray {
         long
     }
 
+
+    pub fn read_i128(&mut self) -> i128 {
+        let mut bytes_slice = self.bytes.as_slice();
+        let long = bytes_slice.get_i128();
+        self.bytes = bytes_slice.to_owned();
+
+        long
+    }
+
+    pub fn read_u128(&mut self) -> u128 {
+        let mut bytes_slice = self.bytes.as_slice();
+        let long = bytes_slice.get_u128();
+        self.bytes = bytes_slice.to_owned();
+
+        long
+    }
+
     pub fn read_bool(&mut self) -> bool {
         !(self.read_u8() == 0)
     }
