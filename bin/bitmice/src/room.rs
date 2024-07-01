@@ -139,9 +139,10 @@ impl Room {
             }
         } else if next_map.starts_with("#") {
             // perm
-            let _map_perma = next_map[1..].parse::<i32>().unwrap();
+            let map_perma = next_map[1..].parse::<i8>().unwrap();
 
             self.map_code = -1;
+            self.map_perma = map_perma;
         } else if next_map.starts_with("<") {
             // xml
             let xml = next_map;
@@ -224,23 +225,24 @@ impl Room {
         self.sync_code
     }
 
-    pub async fn add_client(&mut self, client_: Arc<Mutex<Client>>) -> Result {
+    pub async fn add_client(&mut self, client: Arc<Mutex<Client>>) -> Result {
         if !self.is_new {
-            let mut client = client_.lock().await;
+            let mut c = client.lock().await;
 
-            client.is_dead = true;
-            let client_id = client.id;
+            c.is_dead = true;
+            let client_id = c.id;
             let b = ByteArray::new()
-                .write_bytes(client.player_data())
+                .write_bytes(c.player_data())
                 .write_bool(false)
                 .write_bool(true);
-            drop(client);
+            drop(c);
 
             self.send_data_except(client_id, tokens::send::PLAYER_RESPAWN, b)
                 .await?;
+            crate::client::start_play(Arc::clone(&client)).await?;
         }
 
-        self.clients.push(client_);
+        self.clients.push(client);
 
         Ok(())
     }

@@ -384,7 +384,7 @@ impl Client {
             }
         }
 
-        self.send_data((1, 1), ByteArray::new().write_utf(p.as_str()))
+        self.send_data((1, 1), ByteArray::new().write_i16(p.len() as i16).write_bytes(p))
             .await
     }
 
