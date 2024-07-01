@@ -71,7 +71,7 @@ impl Client {
             room: None,
             data_sender: None,
 
-            name: String::from("**unlogged"),
+            name: String::new(),
             tag: String::from("0000"),
             lang: String::new(),
             computer_lang: String::new(),
@@ -112,6 +112,8 @@ impl Client {
     pub fn full_name(&self) -> String {
         if self.is_souris() {
             return self.name.clone();
+        } else if self.name.is_empty() {
+            return self.address.to_string();
         }
 
         format!("{}#{}", self.name, self.tag)

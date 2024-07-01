@@ -204,7 +204,7 @@ pub async fn handle_client(
         let reader = reader.clone();
         tokio::spawn(async move {
             loop {
-                let mut buffer = vec![0u8; 2048];
+                let mut buffer = vec![0u8; 4096];
 
                 match reader.lock().await.read(&mut buffer).await {
                     Ok(s) => {
@@ -245,17 +245,26 @@ pub async fn handle_client(
                     drop(client);
 
                     let mut length = 0;
-                    for i in 0..10 {
+                    let mut o = 0;
+                    let mut i = 0;
+                    loop {
                         if data.is_empty() {
                             return;
                         }
 
                         let byte = data.read_u8() & 255;
                         length |= (byte & 127) << (i * 7);
+                        o = o << 7;
+                        i += 1;
+
                         if !((byte & 128) == 128) && i < 5 {
                             length += 1;
                             break;
                         }
+                    }
+
+                    if ((o >> 1) & length) != 0 {
+                        length |= o;
                     }
 
                     let mut length = length as usize;
@@ -265,7 +274,7 @@ pub async fn handle_client(
                         length = data.len();
                     }
 
-                    data = data.read(length as usize);
+                    data = data.read(length);
                     let mut client = player.lock().await;
                     let packet_id = data.read_u8();
                     client.packet_id = (client.packet_id + 1) % 100;
@@ -273,7 +282,7 @@ pub async fn handle_client(
                     let tokens = (data.read_u8(), data.read_u8());
 
                     if tokens.0 > 0 && tokens.1 > 0 {
-                        if tokens != (4, 4) {
+                        if !vec![(26, 26), (4, 4)].contains(&tokens) {
                             log::debug!(
                                 "received packet id = [{}], tokens = {:?} from {}",
                                 client.packet_id,

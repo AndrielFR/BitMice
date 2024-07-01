@@ -6,9 +6,15 @@ use bytes::Buf;
 use super::ByteArray;
 
 impl ByteArray {
+    pub fn offset(&mut self, start: usize, end: usize) -> Self {
+        Self {
+            bytes: self.bytes[start..end].to_vec(),
+        }
+    }
+
     pub fn read(&mut self, length: usize) -> Self {
         Self {
-            bytes: self.bytes[0..length].to_vec(),
+            bytes: self.bytes[..length].to_vec(),
         }
     }
 
