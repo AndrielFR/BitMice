@@ -252,6 +252,7 @@ impl Client {
         self.is_jumping = false;
         self.is_moving_right = false;
         self.is_moving_left = false;
+        self.is_shaman = false;
     }
 
     pub async fn load_map(&mut self, new_map: bool, custom_map: bool) -> Result {
