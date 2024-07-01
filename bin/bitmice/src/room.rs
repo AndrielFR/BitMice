@@ -73,17 +73,11 @@ impl Room {
     }
 
     pub async fn players(&self) -> Vec<Arc<Mutex<Client>>> {
-        let mut ps = Vec::new();
-
-        for client in self.clients.iter() {
-            ps.push(Arc::clone(client));
-        }
-
-        ps
+        self.clients.iter().map(|c| Arc::clone(c)).collect()
     }
 
     pub async fn players_count(&self) -> usize {
-        self.players().await.len()
+        self.clients.len()
     }
 
     async fn alive_count(&self) -> i16 {

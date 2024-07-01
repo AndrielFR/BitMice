@@ -49,13 +49,17 @@ impl Server {
         ps
     }
 
-    pub async fn get_player(&self, name: String) -> Option<Arc<Mutex<Client>>> {
+    pub async fn get_player(&self, mut name: String) -> Option<Arc<Mutex<Client>>> {
         let clients = CLIENTS.lock().await;
 
         for client in clients.iter() {
             let c = client.lock().await;
 
-            if *c.name == name {
+            if c.is_guest {
+                name = format!("*{}", name);
+            }
+
+            if *c.name == name || *c.full_name() == name {
                 return Some(Arc::clone(client));
             }
         }

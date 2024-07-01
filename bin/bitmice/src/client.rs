@@ -370,7 +370,6 @@ impl Client {
         }
 
         let mut p = ByteArray::new()
-            .write_u8(1)
             .write_u8(tokens.0)
             .write_u8(tokens.1);
 
@@ -390,7 +389,7 @@ impl Client {
     }
 
     pub async fn close(&mut self) -> io::Result<()> {
-        let writer = self.writer.clone();
+        let writer = Arc::clone(&self.writer);
 
         self.is_closed = true;
         writer.lock_owned().await.shutdown().await?;
@@ -438,9 +437,9 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
     client.load_map(new_map, custom_map).await?;
 
     // update player list
-    let room = client.room.clone();
+    let room = Arc::clone(client.room.as_ref().unwrap());
+    let mut r = room.lock().await;
     drop(client);
-    let mut r = room.as_ref().unwrap().lock().await;
     let players = r.players().await;
 
     let mut data = ByteArray::new().write_i16(players.len() as i16);
@@ -461,7 +460,7 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
     client.sync(sync_code).await?;
 
     // update round time
-    let r = room.as_ref().unwrap().lock().await;
+    let r = room.lock().await;
     let round_time = r.round_time;
     drop(r);
     client
@@ -472,7 +471,7 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
         .await?;
 
     // map start time
-    let r = room.as_ref().unwrap().lock().await;
+    let r = room.lock().await;
     let is_dead = client.is_dead;
     drop(client);
     if is_dead
