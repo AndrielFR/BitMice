@@ -43,7 +43,7 @@ pub async fn handle(
     }
 
     let mut b = ByteArray::new()
-        .write_i32(client.id)
+        .write_u32(client.id)
         .write_i32(round_code)
         .write_bool(is_moving_right)
         .write_bool(is_moving_left)

@@ -19,12 +19,12 @@ pub static ROOMS: Lazy<Mutex<Vec<Arc<Mutex<Room>>>>> = Lazy::new(|| Mutex::new(V
 pub struct Server {
     pub ckey: String,
 
-    pub last_player_id: i32,
-    pub version: i16,
+    pub last_player_id: u32,
+    pub version: u16,
 }
 
 impl Server {
-    pub fn new(ckey: &str, version: i16) -> Self {
+    pub fn new(ckey: &str, version: u16) -> Self {
         Self {
             ckey: ckey.to_string(),
 
@@ -33,7 +33,7 @@ impl Server {
         }
     }
 
-    pub fn new_player_id(&mut self) -> i32 {
+    pub fn new_player_id(&mut self) -> u32 {
         self.last_player_id += 1;
         self.last_player_id
     }
@@ -148,7 +148,7 @@ impl Server {
 
     pub async fn send_data_except(
         &self,
-        client_id: i32,
+        client_id: u32,
         tokens: (u8, u8),
         data: ByteArray,
     ) -> Result {

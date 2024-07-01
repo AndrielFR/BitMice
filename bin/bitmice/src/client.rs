@@ -23,22 +23,29 @@ pub struct Client {
     pub room: Option<Arc<Mutex<Room>>>,
     pub(super) data_sender: Option<Sender<ByteArray>>,
 
+    pub color: String,
     pub name: String,
+    pub nick_color: String,
     pub tag: String,
     pub lang: String,
+    pub look: String,
     pub computer_lang: String,
     pub computer_os: String,
     pub last_room: String,
+    pub shaman_color: String,
 
-    pub id: i32,
+    pub id: u32,
     pub auth_key: i32,
+    pub gender: u8,
     pub last_response: u128,
     pub(super) packet_id: u8,
     pub position_x: u64,
     pub position_y: u64,
     pub priv_level: i8,
-    pub time_played: i64,
-    pub score: i16,
+    pub time_played: u64,
+    pub title_number: u16,
+    pub title_stars: u8,
+    pub score: u16,
     pub speed_x: u16,
     pub speed_y: u16,
     pub start_time: u128,
@@ -50,6 +57,7 @@ pub struct Client {
     pub is_jumping: bool,
     pub is_moving_right: bool,
     pub is_moving_left: bool,
+    pub is_shaman: bool,
     pub version_validated: bool,
     pub last_ping: bool,
 
@@ -71,20 +79,27 @@ impl Client {
             room: None,
             data_sender: None,
 
+            color: String::from("95d9d6"),
             name: String::new(),
+            nick_color: String::from("953"),
             tag: String::from("0000"),
             lang: String::new(),
+            look: String::from("1;0,0,0,0,0,0,0,0,0,0,0"),
             computer_lang: String::new(),
             computer_os: String::new(),
             last_room: String::new(),
+            shaman_color: String::from("95fe3f"),
 
             id: 0,
             auth_key: 0,
+            gender: 2,
             last_response: 0,
             packet_id: 0,
             position_x: 0,
             position_y: 0,
             priv_level: 1,
+            title_number: 5,
+            title_stars: 3,
             time_played: 0,
             score: 0,
             speed_x: 0,
@@ -98,6 +113,7 @@ impl Client {
             is_jumping: false,
             is_moving_right: false,
             is_moving_left: false,
+            is_shaman: false,
             version_validated: false,
             last_ping: false,
 
@@ -126,21 +142,21 @@ impl Client {
     pub fn player_data(&self) -> ByteArray {
         ByteArray::new()
             .write_utf(&self.full_name()) // player name
-            .write_i32(self.id) // player code
-            .write_bool(false) // is shaman
+            .write_u32(self.id) // player code
+            .write_bool(self.is_shaman) // is shaman
             .write_bool(self.is_dead) // is dead
-            .write_i16(self.score) // player score
+            .write_u16(self.score) // player score
             .write_bool(self.has_cheese) // has cheese
-            .write_i16(5) // title number
-            .write_i8(1) // title stars
-            .write_i8(1) // gender
+            .write_u16(self.title_number) // title number
+            .write_u8(self.title_stars) // title stars
+            .write_u8(self.gender) // gender
             .write_utf("") // ??
-            .write_utf("1;0,0,0,0,0,0,0,0,0,0,0") // player look
+            .write_utf(&self.look) // player look
             .write_bool(false) // ??
-            .write_i32(i32::from_str_radix("95d9d6", 16).unwrap()) // mouse color
-            .write_i32(i32::from_str_radix("95d9d6", 16).unwrap()) // shaman color
-            .write_i32(0) // ??
-            .write_i32(i32::from_str_radix("95d9d6", 16).unwrap()) // nick color
+            .write_u32(u32::from_str_radix(&self.color, 16).unwrap()) // mouse color
+            .write_u32(u32::from_str_radix(&self.shaman_color, 16).unwrap()) // shaman color
+            .write_u32(0) // ??
+            .write_u32(u32::from_str_radix(&self.nick_color, 16).unwrap()) // nick color
     }
 
     pub async fn enter_room(&mut self, name: &str) -> Result {
@@ -302,7 +318,7 @@ impl Client {
         if !self.has_cheese {
             room.send_data(
                 tokens::send::PLAYER_GET_CHEESE,
-                ByteArray::new().write_i32(self.id).write_bool(true),
+                ByteArray::new().write_u32(self.id).write_bool(true),
             )
             .await?;
             self.has_cheese = true;
@@ -395,7 +411,7 @@ pub async fn die(client_: Arc<Mutex<Client>>) -> Result {
     let room = client.room.clone();
     let r = room.as_ref().unwrap().lock().await;
 
-    let b = vec![OldData::Integer(client.id), OldData::Short(client.score)];
+    let b = vec![OldData::Integer(client.id as i32), OldData::Short(client.score as i16)];
     drop(client);
     r.send_old_data(tokens::old::send::PLAYER_DIED, b).await?;
 

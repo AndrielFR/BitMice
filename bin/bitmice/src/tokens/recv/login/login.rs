@@ -70,7 +70,7 @@ pub async fn handle(
 
         let mut c = client.lock().await;
         c.priv_level = 0;
-        c.time_played = UNIX_EPOCH.elapsed().unwrap().as_millis() as i64;
+        c.time_played = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64;
         c.is_guest = true;
     }
 
@@ -138,17 +138,17 @@ async fn identification(client: Arc<Mutex<Client>>) -> Result {
     }
 
     let data = ByteArray::new()
-        .write_i32(client.id)
+        .write_u32(client.id)
         .write_utf(&client.name)
-        .write_i32(client.time_played as i32)
+        .write_u32(client.time_played as u32)
         .write_i8(language_id(&client.lang))
-        .write_i32(client.id)
+        .write_u32(client.id)
         .write_bool(true)
-        .write_i8(perms.len() as i8)
+        .write_u8(perms.len() as u8)
         .write_bytes(p)
         .write_bool(client.priv_level >= 9)
-        .write_i16(255)
-        .write_i16(0);
+        .write_u16(255)
+        .write_u16(0);
     client
         .send_data(tokens::send::PLAYER_IDENTIFICATION, data)
         .await
@@ -160,7 +160,7 @@ async fn login(client: Arc<Mutex<Client>>) -> Result {
 
     let old_data = vec![
         OldData::String(client.full_name()),
-        OldData::Integer(client.id),
+        OldData::Integer(client.id as i32),
         OldData::Byte(client.priv_level),
         OldData::Byte(30),
         OldData::Bool(client.is_souris()),

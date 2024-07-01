@@ -14,7 +14,7 @@ pub async fn handle(
     mut data: ByteArray,
     _packet_id: u8,
 ) -> Result {
-    let version = data.read_i16();
+    let version = data.read_u16();
     let lang = data.read_utf().to_uppercase();
     let ckey = data.read_utf();
     let stand = data.read_utf();

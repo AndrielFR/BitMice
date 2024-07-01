@@ -29,7 +29,7 @@ pub struct Room {
     pub map_perma: i8,
     pub round_time: i16,
     pub start_time: u128,
-    pub time_change_map: i16,
+    pub time_change_map: u16,
     pub last_round_code: i8,
     sync_code: i32,
 
@@ -55,7 +55,7 @@ impl Room {
 
             map_code: -1,
             map_perma: 0,
-            round_time: 0,
+            round_time: -1,
             start_time: 0,
             time_change_map: 0,
             last_round_code: -1,
@@ -222,7 +222,7 @@ impl Room {
             if let Some(player) = player {
                 let p = player.lock().await;
 
-                self.sync_code = p.id;
+                self.sync_code = p.id as i32;
                 self.sync_name = p.full_name();
             }
         }
@@ -264,7 +264,7 @@ impl Room {
 
     pub async fn send_data_except(
         &self,
-        client_id: i32,
+        client_id: u32,
         tokens: (u8, u8),
         data: ByteArray,
     ) -> Result {
@@ -364,7 +364,7 @@ pub async fn trigger(room: Arc<Mutex<Room>>) -> Result {
             let map_type = r.map_type;
             drop(r);
 
-            if is_new || alive_count == 0 || can_change_map && round_time <= 0 {
+            if is_new || alive_count <= 0 || can_change_map && round_time <= 0 {
                 if is_new {
                     let mut r = room.lock().await;
                     r.is_new = false;

@@ -21,9 +21,9 @@ pub async fn handle(
     let r = room.lock().await;
 
     let b = ByteArray::new()
-        .write_i32(client.id)
+        .write_u32(client.id)
         .write_i8(crouch)
-        .write_i8(0);
+        .write_u8(0);
 
     drop(client);
 
