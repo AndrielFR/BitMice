@@ -160,24 +160,24 @@ impl Client {
     }
 
     pub async fn enter_room(&mut self, name: &str) -> Result {
-        let server_ = Arc::clone(&self.server);
-        let server = server_.lock().await;
+        let server = Arc::clone(&self.server);
+        let s = server.lock().await;
 
         // get room
-        let room = match server.get_room(name.to_string(), self.lang.clone()).await {
+        let room = match s.get_room(name.to_string(), self.lang.clone()).await {
             Some(r) => r,
             None => {
                 if name.is_empty() {
-                    server.get_recommended_room(self.lang.clone()).await
+                    s.get_recommended_room(self.lang.clone()).await
                 } else {
                     let room = Room::new(name.to_string(), self.lang.clone());
                     let r = Arc::new(Mutex::new(room));
-                    server.add_room(Arc::clone(&r)).await;
+                    s.add_room(Arc::clone(&r)).await;
                     r
                 }
             }
         };
-        drop(server);
+        drop(s);
 
         // parse room's name
         let mut name = name.replace("<", "&lt;");
@@ -270,7 +270,7 @@ impl Client {
             } else {
                 -1
             })
-            .write_i16(r.players_count().await as i16)
+            .write_i16(r.players().len() as i16)
             .write_i8(r.last_round_code)
             .write_i32(xml.len() as i32)
             .write_bytes(xml)
@@ -313,16 +313,15 @@ impl Client {
     }
 
     pub async fn get_cheese(&mut self) -> Result {
-        let mut room = self.room.as_mut().unwrap().lock().await;
+        let room = self.room.as_mut().unwrap().lock().await;
 
-        room.can_change_map = true;
         if !self.has_cheese {
+            self.has_cheese = true;
             room.send_data(
                 tokens::send::PLAYER_GET_CHEESE,
                 ByteArray::new().write_u32(self.id).write_bool(true),
             )
             .await?;
-            self.has_cheese = true;
 
             let map_type = room.map_type;
             drop(room);
@@ -369,9 +368,7 @@ impl Client {
             return Ok(());
         }
 
-        let mut p = ByteArray::new()
-            .write_u8(tokens.0)
-            .write_u8(tokens.1);
+        let mut p = ByteArray::new().write_u8(tokens.0).write_u8(tokens.1);
 
         for d in old_data {
             match d {
@@ -384,8 +381,11 @@ impl Client {
             }
         }
 
-        self.send_data((1, 1), ByteArray::new().write_i16(p.len() as i16).write_bytes(p))
-            .await
+        self.send_data(
+            (1, 1),
+            ByteArray::new().write_i16(p.len() as i16).write_bytes(p),
+        )
+        .await
     }
 
     pub async fn close(&mut self) -> io::Result<()> {
@@ -411,20 +411,23 @@ pub async fn die(client_: Arc<Mutex<Client>>) -> Result {
     let room = client.room.clone();
     let r = room.as_ref().unwrap().lock().await;
 
-    let b = vec![OldData::Integer(client.id as i32), OldData::Short(client.score as i16)];
+    let b = vec![
+        OldData::Integer(client.id as i32),
+        OldData::Short(client.score as i16),
+    ];
     drop(client);
     r.send_old_data(tokens::old::send::PLAYER_DIED, b).await?;
 
     Ok(())
 }
 
-pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
-    let mut client = client_.lock().await;
+pub async fn start_play(client: Arc<Mutex<Client>>) -> Result {
+    let mut c = client.lock().await;
 
     // load map
-    client.start_time = UNIX_EPOCH.elapsed().unwrap().as_millis();
+    c.start_time = UNIX_EPOCH.elapsed().unwrap().as_millis();
 
-    let room = client.room.as_ref().unwrap().lock().await;
+    let room = c.room.as_ref().unwrap().lock().await;
     let mut new_map = true;
     let mut custom_map = false;
     if room.map_code != -1 {
@@ -434,13 +437,13 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
     }
 
     drop(room);
-    client.load_map(new_map, custom_map).await?;
+    c.load_map(new_map, custom_map).await?;
 
     // update player list
-    let room = Arc::clone(client.room.as_ref().unwrap());
+    let room = Arc::clone(c.room.as_ref().unwrap());
     let mut r = room.lock().await;
-    drop(client);
-    let players = r.players().await;
+    drop(c);
+    let players = r.players();
 
     let mut data = ByteArray::new().write_i16(players.len() as i16);
     for player in players {
@@ -449,37 +452,36 @@ pub async fn start_play(client_: Arc<Mutex<Client>>) -> Result {
         data = data.write_bytes(player.player_data());
     }
 
-    let mut client = client_.lock().await;
-    client.send_data(tokens::send::PLAYER_LIST, data).await?;
-    drop(client);
+    let mut c = client.lock().await;
+    c.send_data(tokens::send::PLAYER_LIST, data).await?;
+    drop(c);
 
     // sync users
     let sync_code = r.get_sync_code().await;
     drop(r);
-    let mut client = client_.lock().await;
-    client.sync(sync_code).await?;
+    let mut c = client.lock().await;
+    c.sync(sync_code).await?;
 
     // update round time
     let r = room.lock().await;
     let round_time = r.round_time;
     drop(r);
-    client
-        .send_data(
-            tokens::send::ROUND_TIME,
-            ByteArray::new().write_i16(if round_time < 0 { 0 } else { round_time }),
-        )
-        .await?;
+    c.send_data(
+        tokens::send::ROUND_TIME,
+        ByteArray::new().write_i16(if round_time < 0 { 0 } else { round_time }),
+    )
+    .await?;
 
     // map start time
     let r = room.lock().await;
-    let is_dead = client.is_dead;
-    drop(client);
+    let is_dead = c.is_dead;
+    drop(c);
     if is_dead
         || r.map_type == MapType::Tutorial
         || r.map_type == MapType::Totem
         || r.room_type == RoomType::Bootcamp
         || r.room_type == RoomType::Defilante
-        || r.players_count().await < 2
+        || r.players().len() < 2
     {
         r.start_map(false).await?;
     } else {

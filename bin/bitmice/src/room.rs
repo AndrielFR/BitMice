@@ -72,18 +72,14 @@ impl Room {
         }
     }
 
-    pub async fn players(&self) -> Vec<Arc<Mutex<Client>>> {
+    pub fn players(&self) -> Vec<Arc<Mutex<Client>>> {
         self.clients.iter().map(|c| Arc::clone(c)).collect()
     }
 
-    pub async fn players_count(&self) -> usize {
-        self.clients.len()
-    }
-
-    async fn alive_count(&self) -> i16 {
+    pub async fn alive(&self) -> i16 {
         let mut count = 0;
 
-        for player in self.players().await {
+        for player in self.players() {
             let p = player.lock().await;
 
             if !p.is_dead {
@@ -133,6 +129,7 @@ impl Room {
                 self.map_name = info[0].to_string();
                 self.map_xml = info[1].to_string();
                 self.map_perma = info[2].parse::<i8>().unwrap();
+                self.map_type = MapType::Custom;
                 self.is_inverted_map = false;
             } else {
                 self.map_code = 0;
@@ -143,6 +140,7 @@ impl Room {
 
             self.map_code = -1;
             self.map_perma = map_perma;
+            self.map_type = MapType::Perm;
         } else if next_map.starts_with("<") {
             // xml
             let xml = next_map;
@@ -151,6 +149,7 @@ impl Room {
             self.map_name = String::from("#Module");
             self.map_xml = xml;
             self.map_perma = 22;
+            self.map_type = MapType::Xml;
             self.is_inverted_map = false;
         } else {
             return;
@@ -160,7 +159,7 @@ impl Room {
     pub async fn start_map(&self, start: bool) -> Result {
         self.send_data(
             tokens::send::MAP_START_TIMER,
-            ByteArray::new().write_bool(false), // use start variable
+            ByteArray::new().write_bool(start), // use start variable
         )
         .await?;
 
@@ -205,7 +204,7 @@ impl Room {
     }
 
     pub async fn get_sync_code(&mut self) -> i32 {
-        let players = self.players().await;
+        let players = self.players();
 
         if players.is_empty() {
             if self.sync_code == -1 {
@@ -247,8 +246,33 @@ impl Room {
         Ok(())
     }
 
+    pub async fn remove_client(&mut self, client_id: u32) {
+        for (i, client) in self.players().iter().enumerate() {
+            let mut c = client.lock().await;
+            if c.id == client_id {
+                c.reset_player();
+                c.is_dead = true;
+                c.score = 0;
+
+                if self.alive().await <= 0 {
+                    // TODO: delete room
+                }
+
+                self.send_old_data(
+                    tokens::old::send::PLAYER_DISCONNECT,
+                    vec![OldData::Integer(c.id as i32)],
+                )
+                .await
+                .unwrap();
+
+                self.clients.swap_remove(i);
+                break;
+            }
+        }
+    }
+
     pub async fn send_data(&self, tokens: (u8, u8), data: ByteArray) -> Result {
-        for player in self.players().await {
+        for player in self.players() {
             match player.try_lock() {
                 Ok(mut player) => player.send_data(tokens, data.clone()).await?,
                 Err(_) => continue,
@@ -264,7 +288,7 @@ impl Room {
         tokens: (u8, u8),
         data: ByteArray,
     ) -> Result {
-        for player in self.players().await {
+        for player in self.players() {
             match player.try_lock() {
                 Ok(mut player) => {
                     if player.id != client_id {
@@ -279,7 +303,7 @@ impl Room {
     }
 
     pub async fn send_old_data(&self, tokens: (u8, u8), data: Vec<OldData>) -> Result {
-        for player in self.players().await {
+        for player in self.players() {
             match player.try_lock() {
                 Ok(mut player) => player.send_old_data(tokens, data.clone()).await?,
                 Err(_) => continue,
@@ -331,7 +355,7 @@ pub async fn change_map(room: Arc<Mutex<Room>>) -> Result {
     }
     r.start_time = UNIX_EPOCH.elapsed().unwrap().as_millis();
 
-    let players = r.players().await;
+    let players = r.players();
     drop(r);
     for player in players {
         let mut p = player.lock().await;
@@ -340,6 +364,9 @@ pub async fn change_map(room: Arc<Mutex<Room>>) -> Result {
         drop(p);
         crate::client::start_play(player).await?;
     }
+
+    let mut r = room.lock().await;
+    r.can_change_map = false;
 
     Ok(())
 }
@@ -351,20 +378,36 @@ pub async fn trigger(room: Arc<Mutex<Room>>) -> Result {
 
             r.round_time -= 1;
 
-            let alive_count = r.alive_count().await;
+            let alive_count = r.alive().await;
             let round_time = r.round_time;
 
             let can_change_map = r.can_change_map;
             let is_new = r.is_new;
 
             let map_type = r.map_type;
+            let room_type = r.room_type;
             drop(r);
+
+            if room_type == RoomType::Racing && can_change_map && round_time > 20 {
+                let mut r = room.lock().await;
+                r.round_time = 21;
+
+                for player in r.players() {
+                    let mut p = player.lock().await;
+
+                    p.send_data(
+                        tokens::send::ROUND_TIME,
+                        ByteArray::new().write_i16(r.round_time),
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
 
             if is_new || alive_count <= 0 || can_change_map && round_time <= 0 {
                 if is_new {
                     let mut r = room.lock().await;
                     r.is_new = false;
-                    drop(r);
                 }
 
                 if map_type == MapType::Editor

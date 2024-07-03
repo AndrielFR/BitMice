@@ -37,7 +37,7 @@ pub async fn handle(
     } else if s.get_player(identity.clone()).await.is_some() {
         let mut c = client.lock().await;
 
-        if password.is_empty(){
+        if password.is_empty() {
             let random_name = generate_captcha(thread_rng().gen_range(6..16)).to_lowercase();
             c // already connected, choose another name
                 .send_data(
@@ -93,9 +93,7 @@ pub async fn handle(
 
     // send anchors
     let mut c = client.lock().await;
-    c
-        .send_old_data(tokens::old::send::ANCHORS, vec![])
-        .await?;
+    c.send_old_data(tokens::old::send::ANCHORS, vec![]).await?;
 
     Ok(())
 }
@@ -154,7 +152,6 @@ async fn identification(client: Arc<Mutex<Client>>) -> Result {
         .await
 }
 
-
 async fn login(client: Arc<Mutex<Client>>) -> Result {
     let mut client = client.lock().await;
 
@@ -197,7 +194,7 @@ async fn login(client: Arc<Mutex<Client>>) -> Result {
             )
             .await?;
     }
-     Ok(())
+    Ok(())
 }
 
 async fn add_to_room(client: Arc<Mutex<Client>>) -> Result {
@@ -209,7 +206,6 @@ async fn add_to_room(client: Arc<Mutex<Client>>) -> Result {
     r.add_client(Arc::clone(&client)).await?;
     let is_new = r.is_new;
     drop(r);
-    crate::client::start_play(Arc::clone(&client)).await?;
 
     if is_new {
         room::trigger(Arc::clone(&room)).await?;

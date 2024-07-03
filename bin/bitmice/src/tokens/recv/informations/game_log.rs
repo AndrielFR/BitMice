@@ -21,7 +21,11 @@ pub async fn handle(
 
     let client = client.lock().await;
 
-    if c == 1 && cc == 1 {
+    if (c, cc) == (0, 0) {
+        return Ok(());
+    }
+
+    if (c, cc) == (1, 1) {
         log::error!(
             "[old] game error encountered by [{}], c = [{}], cc = [{}], error = [{}]",
             client.full_name(),

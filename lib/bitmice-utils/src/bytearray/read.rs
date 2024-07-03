@@ -82,7 +82,6 @@ impl ByteArray {
         long
     }
 
-
     pub fn read_i128(&mut self) -> i128 {
         let mut bytes_slice = self.bytes.as_slice();
         let long = bytes_slice.get_i128();

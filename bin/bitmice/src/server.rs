@@ -67,6 +67,17 @@ impl Server {
         None
     }
 
+    pub async fn remove_player(&self, client: Arc<Mutex<Client>>) {
+        let mut clients = CLIENTS.lock().await;
+
+        if let Some(index) = clients
+            .iter()
+            .position(|v| std::ptr::eq(v.as_ref(), client.as_ref()))
+        {
+            clients.swap_remove(index);
+        }
+    }
+
     pub async fn rooms(&self) -> Vec<Arc<Mutex<Room>>> {
         let rooms = ROOMS.lock().await;
 
@@ -119,7 +130,7 @@ impl Server {
                 if let Some(ref l_r) = last_room {
                     let l_r = l_r.lock().await;
 
-                    if r.players_count().await > l_r.players_count().await {
+                    if r.players().len() > l_r.players().len() {
                         drop(l_r);
                         last_room = Some(Arc::clone(room));
                     }
@@ -181,7 +192,7 @@ pub async fn handle_client(
     clients.push(Arc::clone(&player));
 
     tokio::spawn(async move {
-        let client: Arc<Mutex<Client>> = Arc::clone(&player);
+        let client = Arc::clone(&player);
         let mut client = client.lock().await;
 
         let (data_tx, mut data_rx) = mpsc::channel(16);
@@ -190,6 +201,7 @@ pub async fn handle_client(
 
         // writer
         let writer = writer.clone();
+        let player_w = Arc::clone(&player);
         tokio::spawn(async move {
             loop {
                 let data = match data_rx.recv().await {
@@ -199,6 +211,8 @@ pub async fn handle_client(
 
                 if let Err(_) = writer.lock().await.write_all(data.as_bytes()).await {
                     log::error!("failed to write data");
+                    drop(data_rx);
+                    player_disconnect(player_w).await;
                     break;
                 }
             }
@@ -213,6 +227,8 @@ pub async fn handle_client(
                 match reader.lock().await.read(&mut buffer).await {
                     Ok(s) => {
                         if s == 0 {
+                            drop(data_tx);
+                            player_disconnect(Arc::clone(&player)).await;
                             break;
                         }
 
@@ -220,11 +236,13 @@ pub async fn handle_client(
                     }
                     Err(_) => {
                         log::error!("failed to read data");
+                        drop(data_tx);
+                        player_disconnect(Arc::clone(&player)).await;
                         break;
                     }
                 };
 
-                let mut data = ByteArray::from(buffer.into());
+                let mut data = ByteArray::with(buffer);
                 if data.is_empty() {
                     continue;
                 }
@@ -311,4 +329,33 @@ pub async fn handle_client(
             }
         });
     });
+}
+
+async fn player_disconnect(player: Arc<Mutex<Client>>) {
+    let client = player.lock().await;
+    let client_id = client.id;
+
+    let room = if client.room.is_some() {
+        Some(Arc::clone(&client.room.as_ref().unwrap()))
+    } else {
+        None
+    };
+    let server = Arc::clone(&client.server);
+    drop(client);
+
+    // remove client from room
+    if room.is_some() {
+        let r = room.unwrap();
+        let mut r = r.lock().await;
+        r.remove_client(client_id).await;
+    }
+
+    // remove client from server
+    let s = server.lock().await;
+    s.remove_player(Arc::clone(&player)).await;
+
+    // close tcp connection
+    let mut client = player.lock().await;
+    let _ = client.close().await;
+    drop(client);
 }
