@@ -27,7 +27,7 @@ pub enum OldData {
     Long(i64),
 }
 
-pub fn encode_xml(xml: String) -> Result<Vec<u8>, std::io::Error> {
+pub fn encode_zlib(xml: String) -> Result<Vec<u8>, std::io::Error> {
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     let _ = encoder.write_all(xml.as_bytes());
     encoder.finish()

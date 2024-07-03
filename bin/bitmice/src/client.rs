@@ -12,7 +12,7 @@ use crate::{
     room::{MapType, RoomType},
     tokens, Result, Room, Server,
 };
-use bitmice_utils::{encode_xml, ByteArray, OldData};
+use bitmice_utils::{encode_zlib, ByteArray, OldData};
 
 #[derive(Debug)]
 pub struct Client {
@@ -262,7 +262,7 @@ impl Client {
             true => r.map_xml.clone(),
             false => String::new(),
         };
-        let xml = encode_xml(xml).unwrap();
+        let xml = encode_zlib(xml).unwrap();
 
         let data = ByteArray::new()
             .write_i32(if new_map || custom_map {

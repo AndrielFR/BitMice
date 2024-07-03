@@ -39,6 +39,12 @@ impl ByteArray {
     }
 }
 
+impl ToString for ByteArray {
+    fn to_string(&self) -> String {
+        self.bytes.iter().map(|b| format!(r#"\u{:x}"#, b)).collect()
+    }
+}
+
 impl Into<ByteArray> for &[u8] {
     fn into(self) -> ByteArray {
         ByteArray {

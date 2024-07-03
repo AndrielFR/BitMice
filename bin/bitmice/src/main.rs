@@ -23,7 +23,10 @@ async fn main() {
 
     let ports = &[11801, 12801, 13801, 14801];
 
-    let server = Server::new("yAdByj" , 616);
+    let server = Server::new(
+        "WKvjvHsJiT", //ckey
+        818,          // version
+    );
 
     let server = Arc::new(Mutex::new(server));
 
