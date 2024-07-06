@@ -8,7 +8,7 @@ use std::{
     vec,
 };
 
-use bitmice_utils::{ByteArray, OldData};
+use bitmice_utils::ByteArray;
 use rand::{seq::SliceRandom, Rng};
 use tokio::sync::Mutex;
 
@@ -260,7 +260,7 @@ impl Room {
 
                 self.send_old_data(
                     tokens::old::send::PLAYER_DISCONNECT,
-                    vec![OldData::Integer(c.id as i32)],
+                    ByteArray::with(c.id.to_string().as_bytes().to_vec()),
                 )
                 .await
                 .unwrap();
@@ -302,7 +302,7 @@ impl Room {
         Ok(())
     }
 
-    pub async fn send_old_data(&self, tokens: (u8, u8), data: Vec<OldData>) -> Result {
+    pub async fn send_old_data(&self, tokens: (u8, u8), data: ByteArray) -> Result {
         for player in self.players() {
             match player.try_lock() {
                 Ok(mut player) => player.send_old_data(tokens, data.clone()).await?,

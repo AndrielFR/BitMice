@@ -4,6 +4,7 @@
 extern crate bytes;
 
 mod bytearray;
+pub mod crypt;
 
 use std::io::Write;
 
@@ -16,16 +17,6 @@ use imageproc::{
 use rand::Rng;
 
 const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-#[derive(Clone)]
-pub enum OldData {
-    String(String),
-    Bool(bool),
-    Byte(i8),
-    Short(i16),
-    Integer(i32),
-    Long(i64),
-}
 
 pub fn encode_zlib(xml: String) -> Result<Vec<u8>, std::io::Error> {
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());

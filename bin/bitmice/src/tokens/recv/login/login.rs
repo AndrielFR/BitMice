@@ -4,8 +4,7 @@
 use std::{collections::HashMap, sync::Arc, time::UNIX_EPOCH};
 
 use crate::{room, tokens, Client, Result, Server};
-use bitmice_utils::{generate_captcha, language_id, ByteArray, OldData};
-use rand::{thread_rng, Rng};
+use bitmice_utils::{bytes_to_string, language_id, ByteArray};
 use tokio::sync::Mutex;
 
 pub async fn handle(
@@ -14,15 +13,25 @@ pub async fn handle(
     mut data: ByteArray,
     _packet_id: u8,
 ) -> Result {
+    log::error!("{:?}", bytes_to_string(data.as_bytes()));
     let mut identity = data.read_utf();
     let password = data.read_utf();
     let _url = data.read_utf();
     let mut start_room = data.read_utf();
-    let _result_key = data.read_i32();
+    let mut auth_key = data.read_u32();
 
     let mut s = server.lock().await;
 
-    if identity.is_empty() && password.is_empty() || identity.len() < 3 {
+    for key in &s.login_keys {
+        auth_key ^= key;
+    }
+    if auth_key != s.auth_key {
+        let mut c = client.lock().await;
+        c.close().await?;
+        return Ok(());
+    }
+
+    if identity.is_empty() || identity.len() < 3 {
         let mut c = client.lock().await;
         c // invalid account
             .send_data(
@@ -36,29 +45,15 @@ pub async fn handle(
         return Ok(());
     } else if s.get_player(identity.clone()).await.is_some() {
         let mut c = client.lock().await;
-
-        if password.is_empty() {
-            let random_name = generate_captcha(thread_rng().gen_range(6..16)).to_lowercase();
-            c // already connected, choose another name
-                .send_data(
-                    tokens::send::LOGIN_RESULT,
-                    ByteArray::new()
-                        .write_i8(3)
-                        .write_utf(&random_name)
-                        .write_utf(""),
-                )
-                .await?;
-        } else {
-            c // already connected
-                .send_data(
-                    tokens::send::LOGIN_RESULT,
-                    ByteArray::new()
-                        .write_i8(1)
-                        .write_utf(&identity)
-                        .write_utf(&password),
-                )
-                .await?;
-        }
+        c // already connected
+            .send_data(
+                tokens::send::LOGIN_RESULT,
+                ByteArray::new()
+                    .write_i8(1)
+                    .write_utf(&identity)
+                    .write_utf(&password),
+            )
+            .await?;
 
         return Ok(());
     } else if password.is_empty() {
@@ -93,7 +88,8 @@ pub async fn handle(
 
     // send anchors
     let mut c = client.lock().await;
-    c.send_old_data(tokens::old::send::ANCHORS, vec![]).await?;
+    c.send_old_data(tokens::old::send::ANCHORS, ByteArray::new())
+        .await?;
 
     Ok(())
 }
@@ -155,16 +151,19 @@ async fn identification(client: Arc<Mutex<Client>>) -> Result {
 async fn login(client: Arc<Mutex<Client>>) -> Result {
     let mut client = client.lock().await;
 
-    let old_data = vec![
-        OldData::String(client.full_name()),
-        OldData::Integer(client.id as i32),
-        OldData::Byte(client.priv_level),
-        OldData::Byte(30),
-        OldData::Bool(client.is_souris()),
-        OldData::Integer(0),
-    ];
+    let data = format!(
+        "{}{}{}{}{}{}",
+        client.full_name(),
+        client.id,
+        client.priv_level,
+        30,
+        client.is_souris() as u8,
+        0
+    )
+    .as_bytes()
+    .to_vec();
     client
-        .send_old_data(tokens::old::send::LOGIN, old_data)
+        .send_old_data(tokens::old::send::LOGIN, ByteArray::with(data))
         .await?;
 
     // guest login

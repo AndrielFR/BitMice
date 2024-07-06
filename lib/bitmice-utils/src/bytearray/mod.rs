@@ -61,17 +61,7 @@ impl Into<ByteArray> for Vec<u8> {
 
 impl std::fmt::Debug for ByteArray {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut unicode_data = String::new();
-        for byte in self.as_bytes() {
-            unicode_data.push_str(
-                (*byte as char)
-                    .escape_unicode()
-                    .collect::<String>()
-                    .as_str(),
-            );
-        }
-
-        write!(f, "ByteArray [{}]", unicode_data)
+        write!(f, "ByteArray [{}]", self.to_string())
     }
 }
 

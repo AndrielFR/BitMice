@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2022-2024 AndrielFR <https://github.com/AndrielFR>
 
-use bitmice_utils::{bytes_to_string, str_to_bytes, ByteArray};
+use bitmice_utils::{
+    bytes_to_string,
+    crypt::{compute_keys, decode_chunks},
+    str_to_bytes, ByteArray,
+};
 use once_cell::sync::Lazy;
 use std::{sync::Arc, time::Duration, usize};
 use tokio::{
@@ -19,16 +23,28 @@ pub static ROOMS: Lazy<Mutex<Vec<Arc<Mutex<Room>>>>> = Lazy::new(|| Mutex::new(V
 pub struct Server {
     pub ckey: String,
 
+    pub auth_key: u32,
     pub last_player_id: u32,
+    pub login_keys: Vec<u32>,
+    pub packet_keys: Vec<i32>,
     pub version: u16,
 }
 
 impl Server {
-    pub fn new(ckey: &str, version: u16) -> Self {
+    pub fn new(
+        auth_key: u32,
+        ckey: &str,
+        version: u16,
+        login_keys: &[u32],
+        packet_keys: &[i32],
+    ) -> Self {
         Self {
             ckey: ckey.to_string(),
 
+            auth_key,
             last_player_id: 0,
+            login_keys: login_keys.to_vec(),
+            packet_keys: packet_keys.to_vec(),
             version,
         }
     }
@@ -257,8 +273,8 @@ pub async fn handle_client(
                         return;
                     }
 
-                    log::trace!("received data = [{}]", bytes_to_string(data.as_bytes()));
-                    if bytes_to_string(data.as_bytes()).contains("<policy-file-request/>") {
+                    log::trace!("received data = [{}]", bytes_to_string(&data.as_bytes()));
+                    if bytes_to_string(&data.as_bytes()).contains("<policy-file-request/>") {
                         let policy = str_to_bytes("<cross-domain-policy><allow-access-from domain=\"*\" to-ports=\"*\"/></cross-domain-policy>");
                         let _ = data_tx.send(ByteArray::with(policy)).await.unwrap();
                         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -275,11 +291,11 @@ pub async fn handle_client(
                         }
 
                         let byte = data.read_u8() & 255;
-                        length |= (byte & 127) << (i * 7);
+                        length |= (byte & 127) << 7 * i;
                         o = o << 7;
                         i += 1;
 
-                        if !((byte & 128) == 128) && i < 5 {
+                        if !((byte & 128) == 128 && i < 5) {
                             length += 1;
                             break;
                         }
@@ -298,7 +314,7 @@ pub async fn handle_client(
 
                     data = data.read(length);
                     let mut client = player.lock().await;
-                    let packet_id = data.read_u8();
+                    let mut packet_id = data.read_u8();
                     client.packet_id = (client.packet_id + 1) % 100;
 
                     let tokens = (data.read_u8(), data.read_u8());
@@ -306,7 +322,7 @@ pub async fn handle_client(
                     if tokens.0 > 0 && tokens.1 > 0 {
                         if !vec![(26, 26), (4, 4)].contains(&tokens) {
                             log::debug!(
-                                "received packet id = [{}], tokens = {:?} from {}",
+                                "received packet id = [{}], tokens = {:?} from [{}]",
                                 client.packet_id,
                                 tokens,
                                 client.full_name(),
@@ -320,6 +336,62 @@ pub async fn handle_client(
                         let server = Arc::clone(&client.server);
                         drop(client);
                         let client = Arc::clone(&player);
+
+                        // decrypt packets
+                        if vec![
+                            (26, 7),  // create account
+                            (26, 8),  // login
+                            (28, 48), // send commands
+                            (60, 1),  // old tribulle
+                            (60, 3),  // tribulle
+                            (176, 7), // verify code
+                        ]
+                        .contains(&tokens)
+                        {
+                            let s = server.lock().await;
+
+                            // login
+                            if vec![(26, 8)].contains(&tokens) {
+                                // identification
+
+                                if data.len() < 10 {
+                                    return;
+                                }
+
+                                let keys = compute_keys(
+                                    s.packet_keys.clone(),
+                                    "identification".as_bytes(),
+                                );
+
+                                let mut chunks = Vec::new();
+                                (0..data.read_i16()).for_each(|_| chunks.push(data.read_i32()));
+                                let length = chunks.len() as u32;
+                                decode_chunks(&mut chunks, length, keys);
+
+                                let mut b = ByteArray::new();
+                                for chunk in chunks {
+                                    b = b.write_i32(chunk);
+                                }
+
+                                data = b;
+                            } else {
+                                // decrypt
+                                packet_id += 1;
+
+                                let keys = compute_keys(s.packet_keys.clone(), "msg".as_bytes());
+                                let mut bytes = Vec::new();
+                                for (i, byte) in data.as_bytes().iter().enumerate() {
+                                    bytes.push(
+                                        (*byte as i128
+                                            ^ keys[((packet_id + i as u8) % 20) as usize])
+                                            as u8
+                                            & 0xFF,
+                                    );
+                                }
+
+                                data = ByteArray::with(bytes);
+                            }
+                        }
 
                         tokens::recv::parse_tokens(client, server, tokens, data, packet_id)
                             .await

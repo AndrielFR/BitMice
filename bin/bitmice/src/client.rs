@@ -12,7 +12,7 @@ use crate::{
     room::{MapType, RoomType},
     tokens, Result, Room, Server,
 };
-use bitmice_utils::{encode_zlib, ByteArray, OldData};
+use bitmice_utils::{encode_zlib, ByteArray};
 
 #[derive(Debug)]
 pub struct Client {
@@ -297,17 +297,11 @@ impl Client {
     }
 
     async fn sync(&mut self, code: i32) -> Result {
-        let room = self.room.as_ref().unwrap().lock().await;
-
-        let old_data = if room.map_code != 1 {
-            vec![OldData::Integer(code), OldData::String(String::new())]
-        } else {
-            vec![OldData::Integer(code)]
-        };
-        drop(room);
-
-        self.send_old_data(tokens::old::send::SYNC, old_data)
-            .await?;
+        self.send_old_data(
+            tokens::old::send::SYNC,
+            ByteArray::with(code.to_string().as_bytes().to_vec()),
+        )
+        .await?;
 
         Ok(())
     }
@@ -363,27 +357,19 @@ impl Client {
         Ok(())
     }
 
-    pub async fn send_old_data(&mut self, tokens: (u8, u8), old_data: Vec<OldData>) -> Result {
+    pub async fn send_old_data(&mut self, tokens: (u8, u8), data: ByteArray) -> Result {
         if self.is_closed {
             return Ok(());
         }
 
-        let mut p = ByteArray::new().write_u8(tokens.0).write_u8(tokens.1);
-
-        for d in old_data {
-            match d {
-                OldData::String(s) => p = p.write_bytes(s.as_bytes()),
-                OldData::Bool(b) => p = p.write_bool(b),
-                OldData::Byte(b) => p = p.write_i8(b),
-                OldData::Short(s) => p = p.write_i16(s),
-                OldData::Integer(i) => p = p.write_i32(i),
-                OldData::Long(l) => p = p.write_i64(l),
-            }
-        }
-
         self.send_data(
             (1, 1),
-            ByteArray::new().write_i16(p.len() as i16).write_bytes(p),
+            ByteArray::new()
+                .write_u8(1)
+                .write_u8(tokens.0)
+                .write_u8(tokens.1)
+                .write_u16(data.len() as u16)
+                .write_bytes(data),
         )
         .await
     }
@@ -411,12 +397,11 @@ pub async fn die(client_: Arc<Mutex<Client>>) -> Result {
     let room = client.room.clone();
     let r = room.as_ref().unwrap().lock().await;
 
-    let b = vec![
-        OldData::Integer(client.id as i32),
-        OldData::Short(client.score as i16),
-    ];
+    let data = format!("{}{}", client.id, client.score).as_bytes().to_vec();
     drop(client);
-    r.send_old_data(tokens::old::send::PLAYER_DIED, b).await?;
+
+    r.send_old_data(tokens::old::send::PLAYER_DIED, ByteArray::with(data))
+        .await?;
 
     Ok(())
 }
